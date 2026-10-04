@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# recorded data and logs
+data/
+*.csv
+first_frame.png
+
+# downloaded by ultralytics
+yolov8n.pt
+
+.vscode/
+.idea/
+.claude/

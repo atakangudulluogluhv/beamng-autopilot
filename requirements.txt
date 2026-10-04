@@ -1,0 +1,6 @@
+beamngpy==1.35
+numpy
+opencv-python
+torch
+ultralytics
+matplotlib
