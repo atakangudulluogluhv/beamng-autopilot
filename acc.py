@@ -1,5 +1,5 @@
 """
-Adaptive cruise control. YOLOv8 finds the lead vehicle, the depth camera gives
+Adaptive cruise control. YOLO26 finds the lead vehicle, the depth camera gives
 the distance, and a PD controller on (gap error, closing speed) sets throttle
 and brake. Steering stays with the driver.
 

@@ -1,8 +1,7 @@
-"""YOLOv8 vehicle detection with distance from the depth camera."""
+"""YOLO26 vehicle detection with distance from the depth camera."""
 
 import cv2
 import numpy as np
-import torch
 from ultralytics import YOLO
 
 from config import CAM_WIDTH, CAM_HEIGHT, YOLO_MODEL
@@ -18,20 +17,7 @@ YOLO_MAX_BOX_W  = 0.80
 
 
 def load_yolo(path=YOLO_MODEL):
-    # PyTorch >= 2.6 defaults torch.load to weights_only=True, which can't load
-    # the full model object stored in ultralytics .pt files. The file is the
-    # official yolov8n checkpoint, so turn the check off just for this load.
-    orig_load = torch.load
-
-    def full_load(*args, **kwargs):
-        kwargs['weights_only'] = False
-        return orig_load(*args, **kwargs)
-
-    torch.load = full_load
-    try:
-        return YOLO(path)
-    finally:
-        torch.load = orig_load
+    return YOLO(path)
 
 
 class DepthEstimator:

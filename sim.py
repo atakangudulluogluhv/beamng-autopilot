@@ -2,7 +2,7 @@
 
 import time
 
-from beamngpy import BeamNGpy
+from beamngpy import BeamNGpy, Scenario, Vehicle
 from beamngpy.sensors import Camera
 
 from config import (BNG_HOME, BNG_BINARY, HOST, PORT,
@@ -37,6 +37,19 @@ def open_beamng():
     return bng
 
 
+def start_scenario(bng, level, pos, rot_quat, traffic=0):
+    """Load a level with our car at pos and optional AI traffic around it."""
+    scenario = Scenario(level, 'autopilot')
+    vehicle = Vehicle('ego', model='etk800', license='AUTO')
+    scenario.add_vehicle(vehicle, pos=pos, rot_quat=rot_quat)
+    scenario.make(bng)
+    bng.scenario.load(scenario)
+    bng.scenario.start()
+    if traffic > 0:
+        bng.traffic.spawn(max_amount=traffic, parked_amount=0)
+    return vehicle
+
+
 def wait_for_player_vehicle(bng):
     """Block until the user has spawned into a vehicle, then connect to it."""
     print("Load freeroam and get in a car. Waiting", end="", flush=True)
@@ -62,7 +75,7 @@ def front_camera(bng, vehicle, name, colour=True, depth=False, depth_far=80.0):
                   resolution=(CAM_WIDTH, CAM_HEIGHT),
                   is_render_colours=colour, is_render_depth=depth,
                   is_render_annotations=False, requested_update_time=0.05,
-                  **kwargs)
+                  is_using_shared_memory=True, **kwargs)
 
 
 def wait_for_frame(camera):

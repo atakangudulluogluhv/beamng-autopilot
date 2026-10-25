@@ -15,6 +15,9 @@ import numpy as np
 ROI_BOT_L, ROI_BOT_R = 0.10, 0.90
 ROI_TOP_L, ROI_TOP_R = 0.33, 0.67
 ROI_TOP_Y            = 0.52   # low enough to cut out sky and buildings
+ROI_BOT_Y            = 0.80   # above our own (white) hood
+LOOKAHEAD_Y          = 0.65   # lane centre is measured on this row; the top of the ROI
+                              # is too close to the horizon on open roads
 
 HOUGH_THRESHOLD    = 25
 HOUGH_MIN_LINE_LEN = 30
@@ -36,10 +39,10 @@ def isolate_lane_markings(frame):
 def region_of_interest(img, h, w):
     mask = np.zeros_like(img)
     poly = np.array([[
-        (int(w * ROI_BOT_L), h),
+        (int(w * ROI_BOT_L), int(h * ROI_BOT_Y)),
         (int(w * ROI_TOP_L), int(h * ROI_TOP_Y)),
         (int(w * ROI_TOP_R), int(h * ROI_TOP_Y)),
-        (int(w * ROI_BOT_R), h),
+        (int(w * ROI_BOT_R), int(h * ROI_BOT_Y)),
     ]], dtype=np.int32)
     cv2.fillPoly(mask, poly, 255)
     return cv2.bitwise_and(img, mask), poly
@@ -91,7 +94,8 @@ class LaneDetector:
         """
         h, w = self.h, self.w
         cx = w // 2
-        y_bot, y_top = h, int(h * ROI_TOP_Y)
+        y_bot, y_top = int(h * ROI_BOT_Y), int(h * ROI_TOP_Y)
+        y_look = int(h * LOOKAHEAD_Y)
 
         edges, colour_mask = isolate_lane_markings(frame)
         roi, poly = region_of_interest(edges, h, w)
@@ -120,7 +124,8 @@ class LaneDetector:
         # Only accept a pair if the lane width is plausible
         if l_params and self._sane(l_cand, 'L'):
             if r_cand and self._sane(r_cand, 'R'):
-                if w * 0.20 < abs(r_cand[0] - l_cand[0]) < w * 0.85:
+                # plausible width, and the lines must not cross inside the ROI
+                if w * 0.20 < r_cand[0] - l_cand[0] < w * 0.85 and l_cand[2] < r_cand[2]:
                     self._left_history.append(l_params)
                     self._right_history.append(r_params)
             else:
@@ -137,25 +142,31 @@ class LaneDetector:
         if not self._sane(right, 'R'):
             right = None
 
+        def x_look(params):
+            return int(params[0] * y_look + params[1])
+
         detected_cx = None
-        if left and right:
-            width = abs(right[0] - left[0])
-            ok = w * 0.20 < width < w * 0.85
+        if left and right and left[2] >= right[2]:
+            left = right = None   # crossed: trust neither
+            self.confidence = max(0.0, self.confidence - 0.10)
+        elif left and right:
+            width = x_look(r_avg) - x_look(l_avg)   # lane width on the lookahead row
+            ok = w * 0.10 < width < w * 0.70
             if self.lane_width_px > 0:
                 ok = ok and abs(width - self.lane_width_px) / self.lane_width_px < 0.30
             if ok:
                 self.lane_width_px = width if self.lane_width_px == 0 else \
                                      int(0.92 * self.lane_width_px + 0.08 * width)
-                detected_cx = (left[2] + right[2]) // 2
+                detected_cx = (x_look(l_avg) + x_look(r_avg)) // 2
                 self.confidence = min(1.0, self.confidence + 0.15)
             else:
                 self.confidence = max(0.0, self.confidence - 0.10)
         elif left:
             # One line only: estimate the centre from the last known lane width
-            detected_cx = left[2] + self.lane_width_px // 2
+            detected_cx = x_look(l_avg) + self.lane_width_px // 2
             self.confidence = min(0.65, self.confidence + 0.04)
         elif right:
-            detected_cx = right[2] - self.lane_width_px // 2
+            detected_cx = x_look(r_avg) - self.lane_width_px // 2
             self.confidence = min(0.65, self.confidence + 0.04)
         else:
             self.confidence = max(0.0, self.confidence - 0.10)

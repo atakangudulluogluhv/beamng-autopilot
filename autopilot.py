@@ -9,7 +9,7 @@ clear the PID does most of the work; when they fade or disappear the network
 takes over.
 
 Speed is set by:
-  - ACC: YOLOv8 + depth camera find the lead car, a PD controller keeps the gap
+  - ACC: YOLO26 + depth camera find the lead car, a PD controller keeps the gap
   - curve slowdown: the target speed drops as the steering angle grows
 Steering, throttle and brake are all rate limited so the car doesn't jerk.
 
@@ -21,6 +21,8 @@ click the camera window, then:
   Q    quit
 """
 
+import argparse
+import csv
 import os
 import time
 
@@ -29,17 +31,17 @@ import numpy as np
 import torch
 from beamngpy.sensors import Electrics
 
-from config import CAM_WIDTH, CAM_HEIGHT, MODEL_PATH
+from config import CAM_WIDTH, CAM_HEIGHT, MODEL_PATH, SPAWNS, DATA_DIR
 from dave2 import load_model, preprocess
 from lane_detection import LaneDetector
-from sim import PID, open_beamng, wait_for_player_vehicle, front_camera, wait_for_frame
+from sim import PID, open_beamng, start_scenario, wait_for_player_vehicle, front_camera, wait_for_frame
 from vehicle_detection import VehicleDetector
 
 DEVICE    = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 DEPTH_FAR = 80.0
 
 # Lateral
-LANE_KP, LANE_KI, LANE_KD = 0.0044, 0.000018, 0.0000001   # pixel error -> steering
+LANE_KP, LANE_KI, LANE_KD = 0.0015, 0.000005, 0.0000001   # pixel error -> steering
 LANE_DEADZONE_PX = 8
 MAX_STEER        = 0.45
 MAX_STEER_RATE   = 0.030   # max steering change per control tick
@@ -141,6 +143,16 @@ def draw_hud(display, autopilot, speed_kmh, v_target, steer, w_lane, lane_conf,
 def main():
     global CRUISE_SPEED_KMH
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--map', choices=sorted(SPAWNS),
+                        help='load this map and spawn the car; default: use the car you are in')
+    parser.add_argument('--traffic', type=int, default=0, help='number of AI cars (with --map)')
+    parser.add_argument('--engage', action='store_true', help='start with the autopilot on')
+    parser.add_argument('--duration', type=float, help='quit after this many seconds')
+    parser.add_argument('--log', action='store_true', help='log every control step to data/')
+    parser.add_argument('--record', action='store_true', help='save the HUD view as a video in data/')
+    args = parser.parse_args()
+
     if not os.path.exists(MODEL_PATH):
         print(f"Model not found: {MODEL_PATH}. Train one with bc_train.py first.")
         return
@@ -152,7 +164,10 @@ def main():
     lane_pid = PID(LANE_KP, LANE_KI, LANE_KD)
 
     bng = open_beamng()
-    vehicle = wait_for_player_vehicle(bng)
+    if args.map:
+        vehicle = start_scenario(bng, *SPAWNS[args.map], traffic=args.traffic)
+    else:
+        vehicle = wait_for_player_vehicle(bng)
     electrics = Electrics()
     vehicle.sensors.attach('electrics', electrics)
 
@@ -161,7 +176,25 @@ def main():
     wait_for_frame(cam_colour)
     print("Ready. Click the camera window: A autopilot, +/- speed, D debug, Q quit")
 
-    autopilot     = False
+    log = None
+    if args.log:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        log_path = os.path.join(DATA_DIR, f"autopilot_log_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        log_file = open(log_path, 'w', newline='')
+        log = csv.writer(log_file)
+        log.writerow(['t', 'x', 'y', 'speed_kmh', 'lane_err', 'lane_conf', 'lane_steer', 'bc_steer',
+                      'w_lane', 'steer', 'throttle', 'brake', 'dist_m'])
+        print(f"Logging to {log_path}")
+
+    video = None
+    if args.record:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        video_path = os.path.join(DATA_DIR, f"autopilot_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
+        video = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 10, (CAM_WIDTH, CAM_HEIGHT))
+        print(f"Recording to {video_path}")
+
+    t_start       = time.time()
+    autopilot     = args.engage
     debug_view    = False
     current_steer = 0.0
     smooth_steer  = 0.0
@@ -220,6 +253,12 @@ def main():
 
             vehicle.control(steering=float(current_steer), throttle=throttle_cmd, brake=brake_cmd)
             prev_ctrl_t = now
+            if log:
+                pos = vehicle.state['pos']
+                log.writerow([f"{now - t_start:.2f}", f"{pos[0]:.2f}", f"{pos[1]:.2f}", f"{speed_kmh:.1f}",
+                              lane_err, f"{lane_conf:.2f}", f"{lane_steer:.3f}", f"{bc_steer:.3f}",
+                              f"{w_lane:.2f}", f"{current_steer:.3f}", f"{throttle_cmd:.2f}",
+                              f"{brake_cmd:.2f}", '' if dist_m is None else f"{dist_m:.1f}"])
         else:
             v_target = CRUISE_SPEED_KMH
 
@@ -229,6 +268,8 @@ def main():
         draw_hud(display, autopilot, speed_kmh, v_target, current_steer, w_lane, lane_conf,
                  throttle_cmd, brake_cmd, dist_m)
         cv2.imshow(MAIN_WINDOW, display)
+        if video:
+            video.write(display)
 
         if debug_view:
             dbg = np.hstack([cv2.cvtColor(colour_mask, cv2.COLOR_GRAY2BGR),
@@ -241,7 +282,7 @@ def main():
                 pass
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if key == ord('q') or (args.duration and now - t_start > args.duration):
             break
         elif key == ord('a'):
             autopilot = not autopilot
@@ -259,6 +300,10 @@ def main():
         elif key == ord('d'):
             debug_view = not debug_view
 
+    if log:
+        log_file.close()
+    if video:
+        video.release()
     cv2.destroyAllWindows()
     cam_colour.remove()
     cam_depth.remove()

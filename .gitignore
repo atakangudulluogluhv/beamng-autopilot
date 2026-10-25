@@ -9,7 +9,7 @@ data/
 first_frame.png
 
 # downloaded by ultralytics
-yolov8n.pt
+yolo*.pt
 
 .vscode/
 .idea/

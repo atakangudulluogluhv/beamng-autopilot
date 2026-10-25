@@ -7,10 +7,9 @@ import os
 
 import cv2
 import numpy as np
-from beamngpy import Scenario, Vehicle
 
-from config import ROOT
-from sim import open_beamng, front_camera
+from config import ROOT, SPAWNS
+from sim import open_beamng, start_scenario, front_camera, wait_for_frame
 
 
 def main():
@@ -23,17 +22,13 @@ def main():
         running = False
 
     if running:
-        vehicle = list(bng.vehicles.get_current_vehicles().values())[0]
+        vehicle = list(bng.vehicles.get_current(include_config=False).values())[0]
         vehicle.connect(bng)
     else:
-        scenario = Scenario('west_coast_usa', 'camera_test')
-        vehicle = Vehicle('ego', model='etk800', license='CAM')
-        scenario.add_vehicle(vehicle, pos=(-717, 101, 118), rot_quat=(0, 0, 0.3826834, 0.9238795))
-        scenario.make(bng)
-        bng.scenario.load(scenario)
-        bng.scenario.start()
+        vehicle = start_scenario(bng, *SPAWNS['west_coast_usa'])
 
     camera = front_camera(bng, vehicle, 'test_cam')
+    wait_for_frame(camera)   # the first polls return None until the camera has rendered
     bng.control.pause()
     vehicle.sensors.poll()
     frame = cv2.cvtColor(np.array(camera.poll()['colour']), cv2.COLOR_RGBA2BGR)
